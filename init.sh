@@ -77,7 +77,7 @@ if [[ "$PBF_PATH" =~ [[:space:]] ]]; then
     # We pass the content of PBF_PATH directly to osmium.
     # We must ensure PBF_PATH is not quoted when passed to the command 
     # so that the shell expands the spaces into separate arguments.
-    osmium merge $PBF_PATH -o "$MERGED_FILE"
+    osmium merge $PBF_PATH -o "$MERGED_FILE" --overwrite
     
     echo "Merge complete: $MERGED_FILE"
     
@@ -106,7 +106,7 @@ if [[ "$PBF_URL" =~ [[:space:]] ]]; then
     echo "Merging files with osmium..."
     mkdir -p /nominatim/data
     # Merge all downloaded parts into one file in the data directory
-    osmium merge part_*.osm.pbf -o /nominatim/data/combined-region.osm.pbf
+    osmium merge part_*.osm.pbf -o /nominatim/data/combined-region.osm.pbf --overwrite
     
     # Point PBF_PATH to our new merged file
     export PBF_PATH="/nominatim/data/combined-region.osm.pbf"
