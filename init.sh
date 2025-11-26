@@ -63,6 +63,64 @@ else
   echo "Skipping optional Tiger addresses import"
 fi
 
+# --- START CUSTOM MERGE LOGIC ---
+
+
+# 1. Handle Multiple Local Files in PBF_PATH
+if [[ "$PBF_PATH" =~ [[:space:]] ]]; then
+    echo "---- MULTI-FILE IMPORT DETECTED IN PBF_PATH ----"
+    echo "Merging local files..."
+    
+    # Define the output merged file
+    MERGED_FILE="/nominatim/data/combined-local.osm.pbf"
+    
+    # We pass the content of PBF_PATH directly to osmium.
+    # We must ensure PBF_PATH is not quoted when passed to the command 
+    # so that the shell expands the spaces into separate arguments.
+    osmium merge $PBF_PATH -o "$MERGED_FILE"
+    
+    echo "Merge complete: $MERGED_FILE"
+    
+    # Point Nominatim to the new single file
+    export PBF_PATH="$MERGED_FILE"
+fi
+
+
+
+# Check if PBF_URL contains a space (indicating multiple URLs)
+if [[ "$PBF_URL" =~ [[:space:]] ]]; then
+    echo "Creating combined PBF file from multiple URLs..."
+    
+    mkdir -p /tmp/osm_merge
+    cd /tmp/osm_merge
+    
+    # Counter for filenames
+    i=0
+    # Loop through the space-separated URLs
+    for url in $PBF_URL; do
+        echo "Downloading part $i: $url"
+        curl -L -f -o "part_${i}.osm.pbf" "$url"
+        i=$((i+1))
+    done
+
+    echo "Merging files with osmium..."
+    mkdir -p /nominatim/data
+    # Merge all downloaded parts into one file in the data directory
+    osmium merge part_*.osm.pbf -o /nominatim/data/combined-region.osm.pbf
+    
+    # Point PBF_PATH to our new merged file
+    export PBF_PATH="/nominatim/data/combined-region.osm.pbf"
+    
+    # Clear PBF_URL so the standard downloader below doesn't run
+    unset PBF_URL
+    
+    # Cleanup
+    cd /
+    rm -rf /tmp/osm_merge
+    echo "Merge complete. Using: $PBF_PATH"
+fi
+
+
 if [ "$PBF_URL" != "" ]; then
   echo Downloading OSM extract from "$PBF_URL"
   "${CURL[@]}" "$PBF_URL" -C - --create-dirs -o $OSMFILE
