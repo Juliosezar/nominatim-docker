@@ -14,6 +14,7 @@ fi
 # we re-host the files on a Hetzner storage box because inconsiderate users eat up all of
 # nominatim.org's bandwidth
 # https://github.com/mediagis/nominatim-docker/issues/416
+#
 
 # https://nominatim.org/release-docs/5.2/admin/Import/#wikipediawikidata-rankings
 if [ "$IMPORT_WIKIPEDIA" = "true" ]; then
@@ -63,62 +64,98 @@ else
   echo "Skipping optional Tiger addresses import"
 fi
 
-# --- START CUSTOM MERGE LOGIC ---
-
+# --- START CUSTOM MERGE LOGIC (Convert PBF -> O5M -> Merge -> PBF) ---
 
 # 1. Handle Multiple Local Files in PBF_PATH
 if [[ "$PBF_PATH" =~ [[:space:]] ]]; then
     echo "---- MULTI-FILE IMPORT DETECTED IN PBF_PATH ----"
-    echo "Merging local files..."
     
-    # Define the output merged file
+    mkdir -p /tmp/osm_merge
+    mkdir -p /nominatim/data
+
+    # Variable to hold the list of temporary .o5m files
+    o5m_list=""
+    i=0
+
+    # Loop through each local PBF file
+    for pbf_file in $PBF_PATH; do
+        echo "Converting part $i ($pbf_file) to o5m..."
+        temp_o5m="/tmp/osm_merge/local_part_${i}.o5m"
+        
+        # Convert PBF to O5M (Step 1)
+        osmconvert "$pbf_file" -o="$temp_o5m"
+        
+        # Add to list
+        o5m_list="$o5m_list $temp_o5m"
+        i=$((i+1))
+    done
+    
+    echo "Merging files..."
     MERGED_FILE="/nominatim/data/combined-local.osm.pbf"
     
-    # We pass the content of PBF_PATH directly to osmium.
-    # We must ensure PBF_PATH is not quoted when passed to the command 
-    # so that the shell expands the spaces into separate arguments.
-    osmium merge $PBF_PATH -o "$MERGED_FILE" --overwrite
+    # Merge all O5M files into one PBF (Step 2 & 3)
+    # Note: We must not quote $o5m_list here so it expands to multiple arguments
+    osmconvert $o5m_list -o="$MERGED_FILE"
     
+    # Clean up
+    rm -rf /tmp/osm_merge
+    
+    # Fix permissions
+    chown -R nominatim:nominatim /nominatim/data
+
     echo "Merge complete: $MERGED_FILE"
-    
-    # Point Nominatim to the new single file
     export PBF_PATH="$MERGED_FILE"
 fi
 
-
-
-# Check if PBF_URL contains a space (indicating multiple URLs)
-if [[ "$PBF_URL" =~ [[:space:]] ]]; then
-    echo "Creating combined PBF file from multiple URLs..."
+# 2. Handle Multiple URLs in PBF_URL (only if PBF_PATH is not set yet)
+if [ -z "$PBF_PATH" ] && [[ "$PBF_URL" =~ [[:space:]] ]]; then
+    echo "---- MULTI-URL DOWNLOAD DETECTED IN PBF_URL ----"
     
     mkdir -p /tmp/osm_merge
+    mkdir -p /nominatim/data
     cd /tmp/osm_merge
     
-    # Counter for filenames
+    o5m_list=""
     i=0
-    # Loop through the space-separated URLs
+    
     for url in $PBF_URL; do
         echo "Downloading part $i: $url"
+        # Download
         curl -L -f -o "part_${i}.osm.pbf" "$url"
+        
+        echo "Converting part $i to o5m..."
+        # Convert to O5M immediately to save setup issues
+        osmconvert "part_${i}.osm.pbf" -o="part_${i}.o5m"
+        
+        # Delete the source PBF to save disk space
+        rm "part_${i}.osm.pbf"
+        
+        o5m_list="$o5m_list part_${i}.o5m"
         i=$((i+1))
     done
 
-    echo "Merging files with osmium..."
-    mkdir -p /nominatim/data
-    # Merge all downloaded parts into one file in the data directory
-    osmium merge part_*.osm.pbf -o /nominatim/data/combined-region.osm.pbf --overwrite
+    echo "Merging downloaded files..."
+    FINAL_MERGED="/nominatim/data/combined-download.osm.pbf"
+
+    # Merge O5M files into final PBF
+    osmconvert $o5m_list -o="$FINAL_MERGED"
     
-    # Point PBF_PATH to our new merged file
-    export PBF_PATH="/nominatim/data/combined-region.osm.pbf"
+    # Fix permissions
+    chown -R nominatim:nominatim /nominatim/data
     
-    # Clear PBF_URL so the standard downloader below doesn't run
+    # Setup environment
+    export PBF_PATH="$FINAL_MERGED"
     unset PBF_URL
     
     # Cleanup
     cd /
     rm -rf /tmp/osm_merge
+    
     echo "Merge complete. Using: $PBF_PATH"
 fi
+
+# --- END CUSTOM MERGE LOGIC ---
+
 
 
 if [ "$PBF_URL" != "" ]; then
